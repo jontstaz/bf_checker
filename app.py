@@ -10,6 +10,7 @@ import pandas as pd
 from dash.dependencies import Input, Output, State
 from dotenv import load_dotenv
 import dash_table
+import json
 
 from binance_requester import BinanceFuturesRequester
 
@@ -59,8 +60,10 @@ def checkKeyExistence(keyNum):
             return 1
 global flag2
 global flag3
+global flag4
 flag2 = checkKeyExistence('2')
 flag3 = checkKeyExistence('3')
+flag4 = checkKeyExistence('4')
 
 
 def calc_roe(row):
@@ -183,17 +186,24 @@ def update_income_stats(n, store):
         bf3 = BinanceFuturesRequester(os.getenv("API_KEY3"), os.getenv("API_SECRET3"))
         income_data3, used_weight3 = bf3.get_income_data('REALIZED_PNL')
         id_df3 = pd.DataFrame(income_data3.json())        
+    if flag4 == 1:
+        bf4 = BinanceFuturesRequester(os.getenv("API_KEY4"), os.getenv("API_SECRET4"))
+        income_data4, used_weight4 = bf4.get_income_data('REALIZED_PNL')
+        id_df4 = pd.DataFrame(income_data4.json())        
 
     print("Income-Data call used weight: {} ({:.2%})".format(used_weight, int(used_weight) / 2400))
 
     # income data as frame...
     id_df = pd.DataFrame(income_data.json())
-
-    if flag2 == 1 & flag3 == 1:
-        id_df = pd.concat([id_df, id_df2, id_df3], ignore_index=True, sort=False)
-    elif flag2 == 1 & flag3 == 0:
-        id_df = pd.concat([id_df, id_df2], ignore_index=True, sort=False)
     
+    if flag2 == 1 & flag3 == 1 & flag4 == 1:
+        id_df = pd.concat([id_df, id_df2, id_df3, id_df4], ignore_index=True, sort=False)
+    elif flag3 == 0:
+        if flag2 == 1:
+            id_df = pd.concat([id_df, id_df2], ignore_index=True, sort=False)
+    elif flag4 == 0:
+        if flag3 == 1:
+            id_df = pd.concat([id_df, id_df2, id_df3], ignore_index=True, sort=False)
 
     id_df["time2"] = id_df["time"].apply(lambda x: pd.to_datetime(x / 1000, unit='s', utc=True))
     id_df["date"] = id_df["time2"].dt.date
@@ -298,14 +308,24 @@ def update_position_stats(n, reduceValue):
         balance_data3, balance_weight3 = bf3.get_balance()
         method_weight3 = balance_weight3 + user_weight3
         print("Update-Current call used weight (acc3): {} ({:.2%})".format(method_weight3, int(method_weight3) / 2400))   
+    if flag4 == 1:
+        bf4 = BinanceFuturesRequester(os.getenv("API_KEY4"), os.getenv("API_SECRET4"))
+        userdata4, user_weight4 = bf4.get_position_risc()
+        balance_data4, balance_weight4 = bf4.get_balance()
+        method_weight4 = balance_weight4 + user_weight4
+        print("Update-Current call used weight (acc4): {} ({:.2%})".format(method_weight4, int(method_weight4) / 2400))
     userdata, user_weight = bf.get_position_risc()
     balance_data, balance_weight = bf.get_balance()
 
     method_weight = balance_weight + user_weight
-    if flag2 == 1 & flag3 == 1:
-        method_weight = (method_weight + method_weight2 + method_weight3)/3
-    elif flag2 == 1 & flag3 == 0:
-        method_weight = (method_weight + method_weight2)/2
+    if flag2 == 1 & flag3 == 1 & flag4 == 1:
+        method_weight = (method_weight + method_weight2 + method_weight3 + method_weight4)/4
+    elif flag3 == 0:
+        if flag2 == 1:
+            method_weight = (method_weight + method_weight2)/2
+    elif flag4 == 0:
+        if flag3 == 1:
+            method_weight = (method_weight + method_weight2 + method_weight3)/3
 
     print("Update-Current call used weight: {} ({:.2%})".format(method_weight, int(method_weight) / 2400))
     used_weight = " {} ({:.2%})".format(method_weight, int(method_weight) / 2400)
@@ -355,8 +375,25 @@ def update_position_stats(n, reduceValue):
             "isolatedMargin": bool,
             "isAutoAddMargin": bool,
             "positionSide": str
-            })
-            ud_df = pd.concat([ud_df, ud_df2, ud_df3], ignore_index=False)        
+            }) 
+            if flag4 == 0:
+                ud_df = pd.concat([ud_df, ud_df2, ud_df3], ignore_index=False)   
+            else:
+                ud_df4 = pd.DataFrame(userdata4.json()).astype({
+                "symbol": str,
+                "positionAmt": float,
+                "entryPrice": float,
+                "markPrice": float,
+                "unRealizedProfit": float,
+                "liquidationPrice": float,
+                "leverage": float,
+                "maxNotionalValue": float,
+                "marginType": str,
+                "isolatedMargin": bool,
+                "isAutoAddMargin": bool,
+                "positionSide": str
+                })
+                ud_df = pd.concat([ud_df, ud_df2, ud_df3, ud_df4], ignore_index=False)     
 
     total_pnl = 0
     total_margin = 0
@@ -381,6 +418,10 @@ def update_position_stats(n, reduceValue):
                 balance_data3 = balance_data3.json()[0]
                 balance3 = float(balance_data3['balance'])
                 balance = balance + balance2 + balance3
+                if flag4 == 1:
+                    balance_data4 = balance_data4.json()[0]
+                    balance4 = float(balance_data4['balance'])
+                    balance = balance + balance2 + balance3 + balance4
             else:
                 balance = balance + balance2
         ud_df["walletAllocation"] = ud_df['markMargin'].apply(lambda x: (x / balance) if balance > 0 else 0)
@@ -392,7 +433,7 @@ def update_position_stats(n, reduceValue):
         total_margin = ud_df['markMargin'].sum()
         margin_balance = balance + total_pnl  # is this correct here?
 
-        ud_df.sort_values(by='symbol', inplace=True)
+        ud_df.sort_values(by='pnl', inplace=True)
 
         card_div = html.Div(children=[],
                             className="d-flex flex-row justify-content-around flex-wrap")  # dbc.CardDeck(children=[])
@@ -561,4 +602,4 @@ def update_position_stats(n, reduceValue):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True, port=int(os.getenv("SERVER_PORT")), host=os.getenv("HOST"))
+    app.run_server(debug=False, port=int(os.getenv("SERVER_PORT")), host=os.getenv("HOST"))
